@@ -48,7 +48,15 @@ const ToastContainer = ({ toasts }: { toasts: Toast[] }) => {
 };
 
 const renderFormattedContent = (content: string, settings: AppSettings, onImageClick?: (src: string) => void) => {
-    const parts = content.split(/(\*[^*]+\*|"[^"]+")/g);
+    // Enhanced regex to match all types of double quotes:
+    // Standard English: "text"
+    // Curly/Smart quotes: "text" "text"
+    // German/Polish: „text"
+    // French/Spanish: «text»
+    // Japanese: 「text」
+    // Chinese: 『text』「text」
+    // And other variations
+    const parts = content.split(/(\*[^*]+\*|"[^"]+"|"[^"]+"|„[^"]+"|«[^»]+»|「[^」]+」|『[^』]+』)/g);
 
     return parts.map((part, index) => {
         if (part.startsWith('*') && part.endsWith('*')) {
@@ -57,7 +65,15 @@ const renderFormattedContent = (content: string, settings: AppSettings, onImageC
                     {part}
                 </span>
             );
-        } else if (part.startsWith('"') && part.endsWith('"')) {
+        } else if (
+            (part.startsWith('"') && part.endsWith('"')) ||
+            (part.startsWith('"') && part.endsWith('"')) ||
+            (part.startsWith('"') && part.endsWith('"')) ||
+            (part.startsWith('„') && part.endsWith('"')) ||
+            (part.startsWith('«') && part.endsWith('»')) ||
+            (part.startsWith('「') && part.endsWith('」')) ||
+            (part.startsWith('『') && part.endsWith('』'))
+        ) {
             return (
                 <span key={index} style={{ color: settings.dialogueColor }}>
                     {part}
@@ -1751,7 +1767,7 @@ function App() {
         )}
 
         <div className="flex-1 flex flex-col relative z-10 h-full">
-            <div className="flex items-center justify-between p-6 border-b border-zinc-900/50 bg-[#030303]/60 backdrop-blur z-10 transition-all duration-500">
+            <div className="sticky top-0 flex items-center justify-between p-6 border-b border-zinc-900/50 bg-[#030303]/60 backdrop-blur z-30 transition-all duration-500">
              <div className="w-full max-w-6xl mx-auto flex items-center justify-between gap-4">
                 <div className="flex items-center gap-6 flex-1 min-w-0 group/header">
                     <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-zinc-400 hover:text-white transition-colors shrink-0">

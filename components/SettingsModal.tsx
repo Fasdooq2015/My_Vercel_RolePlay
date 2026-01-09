@@ -4,9 +4,9 @@ import { Button } from './Button';
 import {
   User, Cpu, Server, Key, X, Check, Loader2, Image as ImageIcon,
   Trash2, Upload, Palette, Zap, Sparkles, Globe, BookOpen, Pencil,
-  ToggleRight, ToggleLeft, CheckSquare, Square, Edit, FileJson, Sliders, RefreshCcw, ExternalLink, AlertTriangle, ChevronLeft, Save, Plus, FileCode, Download
+  ToggleRight, ToggleLeft, CheckSquare, Square, Edit, FileJson, Sliders, RefreshCcw, ExternalLink, AlertTriangle, ChevronLeft, Save, Plus, FileCode, Download, Languages, RotateCcw
 } from 'lucide-react';
-import { testConnection } from '../services/apiService';
+import { testConnection, googleTranslateFree, generateResponse } from '../services/apiService';
 import { HORDE_MODELS, GEMINI_MODELS, DEEPSEEK_MODELS, ROUTEWAY_MODELS, INITIAL_SETTINGS, PROMPT_TEMPLATES } from '../constants';
 import { PuterStatus } from './PuterStatus';
 
@@ -37,7 +37,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
   const [puterModels, setPuterModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
-  
+  const [modelSearchQuery, setModelSearchQuery] = useState('');
+
+  // User Persona Translation/Generation State
+  const [personaTranslating, setPersonaTranslating] = useState(false);
+  const [personaGenerating, setPersonaGenerating] = useState(false);
+  const [personaOriginal, setPersonaOriginal] = useState<string | null>(null);
+
   // Lorebook State
   const [manageLorebookMode, setManageLorebookMode] = useState(false);
   const [selectedLorebooks, setSelectedLorebooks] = useState<Set<string>>(new Set());
@@ -241,6 +247,132 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
   const handleSelectPuterModel = (modelId: string) => {
       handleChange('puterModelInput', modelId);
       setShowModelDropdown(false);
+      setModelSearchQuery('');
+  };
+
+  // Smart fuzzy search for model names
+  const smartSearchModels = (query: string, models: string[]): string[] => {
+      if (!query.trim()) return models;
+
+      const searchTerm = query.toLowerCase().trim();
+
+      // Score each model based on match quality
+      const scoredModels = models.map(model => {
+          const modelLower = model.toLowerCase();
+          let score = 0;
+
+          // Exact match (highest priority)
+          if (modelLower === searchTerm) score += 1000;
+
+          // Starts with query
+          if (modelLower.startsWith(searchTerm)) score += 100;
+
+          // Contains query as whole word
+          if (modelLower.includes(` ${searchTerm}`) || modelLower.includes(`-${searchTerm}`) || modelLower.includes(`/${searchTerm}`)) score += 50;
+
+          // Contains query anywhere
+          if (modelLower.includes(searchTerm)) score += 30;
+
+          // Fuzzy match: check if all characters of query appear in order
+          let queryIndex = 0;
+          for (let i = 0; i < modelLower.length && queryIndex < searchTerm.length; i++) {
+              if (modelLower[i] === searchTerm[queryIndex]) {
+                  queryIndex++;
+                  score += 1;
+              }
+          }
+          if (queryIndex === searchTerm.length) score += 10;
+
+          // Split terms match (e.g., "gpt 4" matches "gpt-4o")
+          const queryParts = searchTerm.split(/[\s\-_/.]+/);
+          const modelParts = modelLower.split(/[\s\-_/.]+/);
+          const matchingParts = queryParts.filter(qp => modelParts.some(mp => mp.includes(qp)));
+          score += matchingParts.length * 15;
+
+          return { model, score };
+      });
+
+      // Filter out models with score 0 and sort by score descending
+      return scoredModels
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .map(item => item.model);
+  };
+
+  const filteredPuterModels = smartSearchModels(modelSearchQuery, puterModels);
+
+  // User Persona Handlers
+  const handleTranslatePersona = async () => {
+      const currentPersona = localSettings.userPersona;
+      if (!currentPersona.trim() && !personaOriginal) return;
+
+      // Restore logic
+      if (personaOriginal !== null) {
+          handleChange('userPersona', personaOriginal);
+          setPersonaOriginal(null);
+          return;
+      }
+
+      setPersonaTranslating(true);
+      try {
+          const hasArabic = /[\u0600-\u06FF]/.test(currentPersona);
+          const target = hasArabic ? 'en' : 'ar';
+          const translated = await googleTranslateFree(currentPersona, target);
+          setPersonaOriginal(currentPersona);
+          handleChange('userPersona', translated);
+      } catch (e) {
+          console.error("Persona translation failed", e);
+          alert("Translation failed. Please try again.");
+      } finally {
+          setPersonaTranslating(false);
+      }
+  };
+
+  const handleGeneratePersona = async () => {
+      if (!localSettings.userName.trim()) {
+          alert("Please enter a display name first.");
+          return;
+      }
+
+      setPersonaGenerating(true);
+      try {
+          const prompt = `Based on the user name "${localSettings.userName}", generate a brief, engaging persona description (2-3 sentences) that describes this person's personality, interests, and communication style. Be creative but realistic. Output ONLY the persona description, no extra text.`;
+
+          const dummyChar: any = {
+              id: 'sys',
+              name: 'System',
+              tagline: '',
+              description: '',
+              appearance: '',
+              personality: '',
+              firstMessage: '',
+              chatExamples: '',
+              avatarUrl: '',
+              scenario: '',
+              jailbreak: '',
+              lorebooks: []
+          };
+
+          const tempSettings = {
+              ...localSettings,
+              maxOutputTokens: 256,
+              streamResponse: false,
+              systemPromptOverride: 'You are a creative writing assistant. Generate concise, engaging character descriptions.'
+          };
+
+          const stream = generateResponse([{ id: 'gen', role: 'user', content: prompt, timestamp: 0 }], dummyChar, tempSettings);
+          let fullText = '';
+          for await (const chunk of stream) {
+              fullText += chunk;
+          }
+
+          handleChange('userPersona', fullText.trim());
+      } catch (e) {
+          console.error("Persona generation failed", e);
+          alert("Generation failed. Please check your API settings and try again.");
+      } finally {
+          setPersonaGenerating(false);
+      }
   };
 
   // Lorebook Handlers
@@ -438,12 +570,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                 </div>
                                 <div>
                                     <label className="block text-[10px] font-bold text-zinc-600 uppercase mb-1">Persona Description</label>
-                                    <textarea 
+                                    <textarea
                                         className="w-full bg-black border border-zinc-800 p-3 text-zinc-200 focus:border-orange-500/50 outline-none text-sm h-24 resize-none"
                                         value={localSettings.userPersona}
                                         onChange={(e) => handleChange('userPersona', e.target.value)}
                                         placeholder="Briefly describe yourself to the AI..."
                                     />
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <button
+                                            onClick={handleTranslatePersona}
+                                            disabled={personaTranslating || personaGenerating || (!localSettings.userPersona.trim() && !personaOriginal)}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-black border border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed rounded"
+                                            title={personaOriginal ? "Restore original text" : "Translate (Auto Detect)"}
+                                        >
+                                            {personaTranslating ? (
+                                                <Loader2 size={10} className="animate-spin" />
+                                            ) : personaOriginal ? (
+                                                <RotateCcw size={10} />
+                                            ) : (
+                                                <Languages size={10} />
+                                            )}
+                                            {personaOriginal ? "Restore" : "Translate"}
+                                        </button>
+                                        <button
+                                            onClick={handleGeneratePersona}
+                                            disabled={personaGenerating || personaTranslating || !localSettings.userName.trim()}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-orange-900/20 border border-orange-900/50 text-orange-500 hover:bg-orange-900/30 hover:border-orange-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed rounded"
+                                            title="Generate persona using AI"
+                                        >
+                                            {personaGenerating ? (
+                                                <Loader2 size={10} className="animate-spin" />
+                                            ) : (
+                                                <Sparkles size={10} />
+                                            )}
+                                            Generate
+                                        </button>
+                                    </div>
                                 </div>
                              </div>
                         </div>
@@ -604,16 +766,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                                 </button>
                                             </div>
                                             {showModelDropdown && puterModels.length > 0 && (
-                                                <div className="bg-zinc-900 border border-zinc-800 rounded max-h-48 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700">
-                                                    {puterModels.map((model, idx) => (
-                                                        <button
-                                                            key={idx}
-                                                            onClick={() => handleSelectPuterModel(model)}
-                                                            className="w-full text-left px-3 py-2 text-xs font-mono text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors"
-                                                        >
-                                                            {model}
-                                                        </button>
-                                                    ))}
+                                                <div className="bg-zinc-900 border border-zinc-800 rounded overflow-hidden">
+                                                    <div className="p-2 border-b border-zinc-800 sticky top-0 bg-zinc-900 z-10">
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Search models..."
+                                                            value={modelSearchQuery}
+                                                            onChange={(e) => setModelSearchQuery(e.target.value)}
+                                                            className="w-full bg-black border border-zinc-700 px-2 py-1 text-xs text-zinc-300 placeholder-zinc-600 outline-none focus:border-orange-500/50"
+                                                            autoFocus
+                                                        />
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700">
+                                                        {filteredPuterModels.length > 0 ? (
+                                                            filteredPuterModels.map((model, idx) => (
+                                                                <button
+                                                                    key={idx}
+                                                                    onClick={() => handleSelectPuterModel(model)}
+                                                                    className="w-full text-left px-3 py-2 text-xs font-mono text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors"
+                                                                >
+                                                                    {model}
+                                                                </button>
+                                                            ))
+                                                        ) : (
+                                                            <div className="px-3 py-4 text-center text-xs text-zinc-600 italic">
+                                                                No models match your search
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             )}
                                             <p className="text-[9px] text-zinc-600">
